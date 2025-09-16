@@ -15,7 +15,7 @@ def evaluate_vllm(vllm_model, reward_fn, prompts, sampling_params, ground_truth)
     evaluation_data = []
     format_reward = 0
     answer_reward = 0
-    reward = 0
+    total_reward = 0
 
     for output, ground_truth in zip(outputs, ground_truth):
         prompt = output.prompt
@@ -29,11 +29,11 @@ def evaluate_vllm(vllm_model, reward_fn, prompts, sampling_params, ground_truth)
         evaluation_data.append(data)
         format_reward += reward["format_reward"]
         answer_reward += reward["answer_reward"]
-        reward += reward["reward"]
+        total_reward += reward["reward"]
     print(f"Number of prompts: {len(outputs)}")
     print(f"Format reward: {format_reward / len(outputs)}")
     print(f"Answer reward: {answer_reward / len(outputs)}")
-    print(f"Reward: {reward / len(outputs)}")
+    print(f"Reward: {total_reward / len(outputs)}")
     json.dump(evaluation_data, open("evaluation_data.json", "w"))
 
 
