@@ -1,7 +1,7 @@
 from vllm import LLM, SamplingParams
 from cs336_alignment.drgrpo_grader import r1_zero_reward_fn
 import pandas as pd
-
+import json
 prompts = [
 "Hello, my name is",
 "The president of the United States is",
@@ -34,6 +34,7 @@ def evaluate_vllm(vllm_model, reward_fn, prompts, sampling_params, ground_truth)
     print(f"Format reward: {format_reward / len(outputs)}")
     print(f"Answer reward: {answer_reward / len(outputs)}")
     print(f"Reward: {reward / len(outputs)}")
+    json.dump(evaluation_data, open("evaluation_data.json", "w"))
 
 
 if __name__ == "__main__":
@@ -45,7 +46,7 @@ if __name__ == "__main__":
     llm = LLM(model='Qwen/Qwen2.5-Math-1.5B')
 
     reward_fn = r1_zero_reward_fn
-    test_df = pd.read_parquet("data/competition_math/test.parquet")
+    test_df = pd.read_parquet("/workspace/nano-grpo/data/competition_math/test.parquet")
     prompts = test_df["problem"].tolist()
     ground_truth = test_df["solution"].tolist()
     evaluate_vllm(llm, reward_fn, prompts, sampling_params, ground_truth)
