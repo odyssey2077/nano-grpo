@@ -3,6 +3,7 @@ from cs336_alignment.drgrpo_grader import r1_zero_reward_fn
 import pandas as pd
 import json
 r1_zero_prompt = open("cs336_alignment/prompts/r1_zero.prompt", "r").read()
+
 def evaluate_vllm(vllm_model, reward_fn, prompts, sampling_params, ground_truth):
     outputs = vllm_model.generate(prompts, sampling_params)
     evaluation_data = []
