@@ -27,7 +27,7 @@ def compute_entropy(logits):
 
 def get_response_log_probs(model, input_ids, labels, return_token_entropy):
     logits = model(input_ids).logits
-    selected_logits = logits.gather(dim=-1. index=labels.unsqueeze(-1)).squeeze(-1)
+    selected_logits = logits.gather(dim=-1, index=labels.unsqueeze(-1)).squeeze(-1)
     log_probs = selected_logits - torch.logsumexp(logits, dim=-1)
     ret = {"log_probs": log_probs}
     if return_token_entropy:
