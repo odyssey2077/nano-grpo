@@ -15,6 +15,7 @@ def tokenize_prompt_and_output(prompt_strs, output_strs, tokenizer):
     input_ids = tokenizer(input_strs, return_tensors="pt", padding=True, truncation=True).input_ids
     labels = input_ids[:, 1:]
     input_ids = input_ids[:, :-1]
+    print(input_ids.shape, labels.shape)
     response_mask = torch.zeros(labels.shape, dtype=torch.bool)
     for i in range(len(prompt_token_lengths)):
         response_mask[i, prompt_token_lengths[i]:] = True
