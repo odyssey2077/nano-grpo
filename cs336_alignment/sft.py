@@ -9,7 +9,7 @@ import numpy as np
 import wandb
 import math
 
-total_batch_size = 64
+total_batch_size = 16
 gardient_accumulation_steps = 8
 batch_size = total_batch_size // gardient_accumulation_steps
 epoches = 10
@@ -208,7 +208,6 @@ if __name__ == "__main__":
 
     
     model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-Math-1.5B", torch_dtype=torch.bfloat16, attn_implementation="flash_attention_2", device_map="auto")
-    # model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-Math-1.5B", torch_dtype=torch.bfloat16)
     tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-Math-1.5B")  
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 
