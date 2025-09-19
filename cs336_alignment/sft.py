@@ -10,7 +10,7 @@ import wandb
 import math
 
 total_batch_size = 64
-gardient_accumulation_steps = 4
+gardient_accumulation_steps = 8
 batch_size = total_batch_size // gardient_accumulation_steps
 epoches = 10
 lr = 3e-4
