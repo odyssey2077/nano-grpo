@@ -9,8 +9,9 @@ import numpy as np
 import wandb
 import math
 
-batch_size = 64
-gardient_accumulation_steps = 1
+total_batch_size = 64
+gardient_accumulation_steps = 4
+batch_size = total_batch_size / gardient_accumulation_steps
 epoches = 10
 lr = 3e-4
 r1_zero_prompt = open("cs336_alignment/prompts/r1_zero.prompt", "r").read()
@@ -243,7 +244,8 @@ if __name__ == "__main__":
                 "avg_token_entropy": avg_token_entropy.item(),
                 "learning_rate": scheduler.get_last_lr()[0],
                 "epoch": epoch,
-                "global_step": global_step
+                "global_step": global_step,
+                "total_batch_size": total_batch_size,
             })
             
             global_step += 1            
