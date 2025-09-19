@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torch.optim.lr_scheduler import CosineAnnealingLR
+from vllm_utils
 import pandas as pd
 import numpy as np
 import wandb
@@ -252,9 +253,6 @@ if __name__ == "__main__":
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
-                
-                # Calculate perplexity from loss
-                perplexity = math.exp(loss.item() * gardient_accumulation_steps * batch_size)
 
 
 
