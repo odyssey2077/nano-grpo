@@ -11,7 +11,7 @@ import math
 
 total_batch_size = 64
 gardient_accumulation_steps = 4
-batch_size = total_batch_size / gardient_accumulation_steps
+batch_size = total_batch_size // gardient_accumulation_steps
 epoches = 10
 lr = 3e-4
 r1_zero_prompt = open("cs336_alignment/prompts/r1_zero.prompt", "r").read()
