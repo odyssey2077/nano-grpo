@@ -1,5 +1,5 @@
 from vllm import LLM, SamplingParams
-from cs336_alignment.drgrpo_grader import r1_zero_reward_fn
+from cs336_alignment.drgrpo_grader import r1_zero_reward_fn, extract_answer
 import pandas as pd
 import json
 r1_zero_prompt = open("cs336_alignment/prompts/r1_zero.prompt", "r").read()
@@ -44,4 +44,5 @@ if __name__ == "__main__":
     questions = test_df["problem"].tolist()
     prompts = [r1_zero_prompt.format(question=question) for question in questions]
     ground_truth = test_df["solution"].tolist()
+
     evaluate_vllm(llm, reward_fn, prompts, sampling_params, ground_truth)

@@ -272,7 +272,7 @@ def run_masked_normalize(
             (mask=0) don't contribute to the sum.
     """
     from cs336_alignment.sft import masked_normalize
-    return masked_normalize(tensor, mask, dim, normalize_constant)
+    return masked_normalize(tensor, mask, normalize_constant, dim)
 
 
 """

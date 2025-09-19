@@ -1,26 +1,42 @@
 from transformers import AutoTokenizer, AutoModelForCausalLM
+from cs336_alignment.drgrpo_grader import r1_zero_reward_fn, extract_answer
 import torch.nn.functional as F
 import torch
+from torch.utils.data import Dataset, DataLoader
+from torch.optim.lr_scheduler import CosineAnnealingLR
+import pandas as pd
+import numpy as np
+import wandb
+import math
 
-def forward(train_batch, model):
-    input_ids = train_batch["input_ids"].to(model.device)
-    labels = train_batch["labels"].to(model.device)
-    logits = model(input_ids).logits    
-    loss = F.cross_entropy(logits.view(-1, logits.size(-1)), labels.view(-1))
-    return loss
+batch_size = 64
+gardient_accumulation_steps = 1
+epoches = 10
+lr = 3e-4
+r1_zero_prompt = open("cs336_alignment/prompts/r1_zero.prompt", "r").read()
+
 
 def tokenize_prompt_and_output(prompt_strs, output_strs, tokenizer):
-    prompt_token_lengths = [len(ids) for ids in tokenizer(prompt_strs).input_ids]
-    input_strs = [prompt + output for prompt, output in zip(prompt_strs, output_strs)]
-    input_ids = tokenizer(input_strs, return_tensors="pt", padding=True, truncation=True).input_ids
+    input_ids = []
+    response_masks = []
+    for prompt, output in zip(prompt_strs, output_strs):
+        prompt_token = tokenizer(prompt).input_ids
+        output_token = tokenizer(output).input_ids
+        input_token = prompt_token + output_token
+        response_mask = [False] * (len(prompt_token) - 1) + [True] * (len(input_token) - len(prompt_token))
+        input_ids.append(input_token)
+        response_masks.append(response_mask)
+
+    max_input_length = max([len(input_token) for input_token in input_ids])
+    input_ids = [torch.tensor(input_token + [tokenizer.pad_token_id] * (max_input_length - len(input_token))) for input_token in input_ids]
+    response_masks = [torch.tensor(response_mask + [False] * (max_input_length - 1 - len(response_mask))) for response_mask in response_masks]
+    
+    input_ids = torch.stack(input_ids, dim=0)
     labels = input_ids[:, 1:]
     input_ids = input_ids[:, :-1]
-    print(input_ids.shape, labels.shape)
-    response_mask = torch.zeros(labels.shape, dtype=torch.bool)
-    for i in range(len(prompt_token_lengths)):
-        response_mask[i, prompt_token_lengths[i]:] = True
-    
-    return {"input_ids": input_ids, "labels": labels, "response_mask": response_mask}
+    response_masks = torch.stack(response_masks, dim=0)
+
+    return {"input_ids": input_ids, "labels": labels, "response_mask": response_masks}
 
 def compute_entropy(logits):
     log_p = logits - torch.logsumexp(logits, dim=-1, keepdim=True)
@@ -36,29 +52,208 @@ def get_response_log_probs(model, input_ids, labels, return_token_entropy):
         ret["token_entropy"] = entropy
     return ret
 
-def masked_normalize(tensor, mask, normalize_constant, dim):
-    return torch.sum(tensor * (mask == 1).to(torch.int), dim=dim) / normalize_constant
+def masked_normalize(tensor, mask, normalize_constant, dim: int | None = None):
+    return torch.sum(tensor * ((mask == 1).to(torch.int)), dim=dim) / normalize_constant
 
 def sft_microbatch_train_step(policy_log_probs, response_mask, gardient_accumulation_steps, normalize_constant=1.0):
-    loss = masked_normalize(-policy_log_probs, response_mask, normalize_constant) / gardient_accumulation_steps
+    batch_size = policy_log_probs.shape[0]
+    loss = masked_normalize(-policy_log_probs, response_mask, normalize_constant) / (gardient_accumulation_steps * batch_size)
     loss.backward()
     return loss, {}
 
 def log_generations(model, tokenizer):
-    test_df = pd.read_parquet("/workspace/nano-grpo/data/competition_math/test.parquet")
-    test_df = test_df.sample(5)
+    test_df = pd.read_parquet("data/competition_math/test.parquet")
+    test_df = test_df.sample(10)
     r1_zero_prompt = open("cs336_alignment/prompts/r1_zero.prompt", "r").read()
     questions = test_df["problem"].tolist()
     ground_truth = test_df["solution"].tolist()
     prompt_strs = [r1_zero_prompt.format(question=question) for question in questions]
-    for prompt in prompt_strs:
+    
+    # Initialize lists to collect statistics
+    all_rewards = []
+    all_entropies = []
+    all_response_lengths = []
+    correct_response_lengths = []
+    incorrect_response_lengths = []
+    
+    print("=" * 80)
+    print("GENERATION EVALUATION LOG")
+    print("=" * 80)
+    
+    for i, (prompt, gt) in enumerate(zip(prompt_strs, ground_truth)):
+        print(f"\n--- Example {i+1}/{len(prompt_strs)} ---")
+        
+        # 1. Log the input prompt
+        print(f"INPUT PROMPT:\n{prompt}\n")
+        
+        # Generate response
         input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(model.device)
-        # generate response for each prompt
-        responses = model.generate(input_ids, max_new_tokens=1024, output_scores=True, return_dict_in_generate=True)
-        print(responses)
-    # get logits of the responses
+        with torch.no_grad():
+            outputs = model.generate(
+                input_ids, 
+                max_new_tokens=1024, 
+                output_scores=True, 
+                return_dict_in_generate=True,
+                do_sample=True,
+                temperature=0.7,
+                pad_token_id=tokenizer.eos_token_id
+            )
+        
+        # Extract the generated response
+        generated_tokens = outputs.sequences[0][input_ids.shape[1]:]
+        response = tokenizer.decode(generated_tokens, skip_special_tokens=True)
+        
+        # 2. Log the response generated by the SFT/RL model
+        print(f"GENERATED RESPONSE:\n{response}\n")
+        
+        # 3. Log the ground-truth answer
+        gt_answer = extract_answer(gt) if extract_answer(gt) else "No answer found"
+        print(f"GROUND-TRUTH ANSWER: {gt_answer}")
+        print(f"GROUND-TRUTH SOLUTION:\n{gt}\n")
+        
+        # 4. Log the reward information
+        reward_info = r1_zero_reward_fn(response, gt)
+        print(f"REWARD INFO:")
+        print(f"  - Format Reward: {reward_info['format_reward']}")
+        print(f"  - Answer Reward: {reward_info['answer_reward']}")
+        print(f"  - Total Reward: {reward_info['reward']}")
+        
+        # 5. Calculate and log average token entropy of the response
+        if len(generated_tokens) > 0:
+            # Get logits for the generated tokens
+            response_input_ids = torch.cat([input_ids, generated_tokens.unsqueeze(0)], dim=1)
+            with torch.no_grad():
+                logits = model(response_input_ids).logits
+            
+            # Extract logits for generated tokens only
+            response_logits = logits[0, input_ids.shape[1]-1:-1, :]  # -1 to align with generated tokens
+            
+            # Compute entropy for each token
+            token_entropies = compute_entropy(response_logits)
+            avg_entropy = token_entropies.mean().item()
+            
+            print(f"AVERAGE TOKEN ENTROPY: {avg_entropy:.4f}")
+            all_entropies.append(avg_entropy)
+        else:
+            print("AVERAGE TOKEN ENTROPY: N/A (no tokens generated)")
+            all_entropies.append(0.0)
+        
+        # 6. Collect response length statistics
+        response_length = len(generated_tokens)
+        all_response_lengths.append(response_length)
+        
+        if reward_info['answer_reward'] > 0:
+            correct_response_lengths.append(response_length)
+        else:
+            incorrect_response_lengths.append(response_length)
+        
+        all_rewards.append(reward_info['reward'])
+        
+        print(f"RESPONSE LENGTH: {response_length} tokens")
+        print("-" * 50)
+    
+    # Log aggregate statistics
+    print("\n" + "=" * 80)
+    print("AGGREGATE STATISTICS")
+    print("=" * 80)
+    
+    print(f"Total Examples: {len(prompt_strs)}")
+    print(f"Average Reward: {np.mean(all_rewards):.4f}")
+    print(f"Average Token Entropy: {np.mean(all_entropies):.4f}")
+    
+    # 6. Log response length statistics
+    print(f"\nRESPONSE LENGTH STATISTICS:")
+    print(f"  - Average Response Length: {np.mean(all_response_lengths):.2f} tokens")
+    
+    if correct_response_lengths:
+        print(f"  - Average Response Length (Correct): {np.mean(correct_response_lengths):.2f} tokens")
+    else:
+        print(f"  - Average Response Length (Correct): N/A (no correct responses)")
+    
+    if incorrect_response_lengths:
+        print(f"  - Average Response Length (Incorrect): {np.mean(incorrect_response_lengths):.2f} tokens")
+    else:
+        print(f"  - Average Response Length (Incorrect): N/A (no incorrect responses)")
+    
+    print("=" * 80)
+
+class SFTDataset(Dataset):
+    def __init__(self, input_ids, labels, response_mask):
+        self.input_ids = input_ids
+        self.labels = labels
+        self.response_mask = response_mask
+
+    def __len__(self):
+        return len(self.input_ids)
+
+    def __getitem__(self, idx):
+        input_id = self.input_ids[idx]
+        label = self.labels[idx]
+        response_mask = self.response_mask[idx]
+        return input_id, label, response_mask
 
 if __name__ == "__main__":
-    model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-Math-1.5B", torch_dtype=torch.bfloat16, attn_implementation="flash_attention_2")
+    # Initialize wandb
+    wandb.init(
+        project="sft-training",
+        config={
+            "batch_size": batch_size,
+            "gradient_accumulation_steps": gardient_accumulation_steps,
+            "epochs": epoches,
+            "learning_rate": lr,
+            "model": "Qwen/Qwen2.5-Math-1.5B"
+        }
+    )
+    
+    # model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-Math-1.5B", torch_dtype=torch.bfloat16, attn_implementation="flash_attention_2")
+    model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-Math-1.5B", torch_dtype=torch.bfloat16)
     tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-Math-1.5B")  
-    log_generations(model, tokenizer)  
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+
+    train_df = pd.read_parquet("data/competition_math/train.parquet")
+    questions = train_df["problem"].tolist()
+    prompts = [r1_zero_prompt.format(question=question) for question in questions]
+    ground_truth = train_df["solution"].tolist()    
+    answers = [extract_answer(g) for g in ground_truth]
+    sft_output = [f"{gt}</think> <answer>{a}</answer>" for gt, a in zip(ground_truth, answers)]   
+    tokenize_result = tokenize_prompt_and_output(prompts, sft_output, tokenizer) 
+    input_ids, labels, response_mask = tokenize_result['input_ids'], tokenize_result['labels'], tokenize_result['response_mask']
+    dataset = SFTDataset(input_ids, labels, response_mask)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    
+    # Calculate total training steps for cosine scheduler
+    total_steps = len(dataloader) * epoches // gardient_accumulation_steps
+    scheduler = CosineAnnealingLR(optimizer, T_max=total_steps, eta_min=lr * 0.1)
+    
+    global_step = 0
+    
+    for epoch in range(epoches):
+        for idx, (input_id, label, response_mask) in enumerate(dataloader):
+            print(f"Epoch {epoch}, Batch {idx}")
+            ret = get_response_log_probs(model, input_id, label, return_token_entropy=True)
+            log_probs, token_entropy = ret['log_probs'], ret['token_entropy']            
+            avg_token_entropy = torch.mean(token_entropy)
+            perplexity = torch.exp(-torch.mean(log_probs, dim=-1))
+            
+            loss, info = sft_microbatch_train_step(log_probs, response_mask, gardient_accumulation_steps)
+            wandb.log({
+                "loss": loss.item() * gardient_accumulation_steps,
+                "perplexity": torch.mean(perplexity).item(),
+                "avg_token_entropy": avg_token_entropy.item(),
+                "learning_rate": scheduler.get_last_lr()[0],
+                "epoch": epoch,
+                "global_step": global_step
+            })
+            
+            global_step += 1            
+            if (idx + 1) % gardient_accumulation_steps == 0:
+                optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad()
+                
+                # Calculate perplexity from loss
+                perplexity = math.exp(loss.item() * gardient_accumulation_steps * batch_size)
+
+
+
+
