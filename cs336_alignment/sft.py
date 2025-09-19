@@ -237,6 +237,7 @@ if __name__ == "__main__":
     global_step = 0
     
     for epoch in range(epoches):
+        current_loss, current_perplexity, current_avg_token_entropy = 0, 0, 0        
         for idx, (input_id, label, response_mask) in enumerate(dataloader):
             print(f"Epoch {epoch}, Batch {idx}")
             ret = get_response_log_probs(model, input_id, label, return_token_entropy=True)
@@ -245,7 +246,6 @@ if __name__ == "__main__":
             perplexity = torch.exp(-torch.mean(log_probs))
             
             loss, info = sft_microbatch_train_step(log_probs, response_mask, gardient_accumulation_steps)
-            current_loss, current_perplexity, current_avg_token_entropy = 0, 0, 0
             current_loss += loss.item()
             current_perplexity += perplexity.item()
             current_avg_token_entropy += avg_token_entropy.item()
@@ -255,14 +255,15 @@ if __name__ == "__main__":
                 scheduler.step()
                 optimizer.zero_grad()
                 wandb.log({
-                    "loss": np.mean(current_loss),
-                    "perplexity": np.mean(current_perplexity),
-                    "avg_token_entropy": np.mean(current_avg_token_entropy),
+                    "loss": current_loss,
+                    "perplexity": current_perplexity / gardient_accumulation_steps,
+                    "avg_token_entropy": current_avg_token_entropy / gardient_accumulation_steps,
                     "learning_rate": scheduler.get_last_lr()[0],
                     "epoch": epoch,
                     "global_step": global_step,
                     "total_batch_size": total_batch_size,
                 })
+                current_loss, current_perplexity, current_avg_token_entropy = 0, 0, 0  
                 global_step += 1
         
         # Save model and tokenizer at the end of each epoch
