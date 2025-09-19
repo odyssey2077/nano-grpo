@@ -204,8 +204,9 @@ if __name__ == "__main__":
             "model": "Qwen/Qwen2.5-Math-1.5B"
         }
     )
+
     
-    model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-Math-1.5B", torch_dtype=torch.bfloat16, attn_implementation="flash_attention_2")
+    model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-Math-1.5B", torch_dtype=torch.bfloat16, attn_implementation="flash_attention_2", device_map="auto")
     # model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-Math-1.5B", torch_dtype=torch.bfloat16)
     tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-Math-1.5B")  
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
@@ -218,7 +219,7 @@ if __name__ == "__main__":
     sft_output = [f"{gt}</think> <answer>{a}</answer>" for gt, a in zip(ground_truth, answers)]   
     tokenize_result = tokenize_prompt_and_output(prompts, sft_output, tokenizer) 
     input_ids, labels, response_mask = tokenize_result['input_ids'], tokenize_result['labels'], tokenize_result['response_mask']
-    dataset = SFTDataset(input_ids, labels, response_mask)
+    dataset = SFTDataset(input_ids.to(model.device), labels.to(model.device), response_mask.to(model.device))
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     
     # Calculate total training steps for cosine scheduler
