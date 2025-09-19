@@ -2,17 +2,20 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from cs336_alignment.drgrpo_grader import r1_zero_reward_fn, extract_answer
 import torch.nn.functional as F
 import torch
+import numpy as np
 from torch.utils.data import Dataset, DataLoader
 from torch.optim.lr_scheduler import CosineAnnealingLR
+# from vllm_utils import init_vllm, load_policy_into_vllm_instance
 import pandas as pd
 import numpy as np
 import wandb
 import math
+import os
 
-total_batch_size = 16
-gardient_accumulation_steps = 8
+total_batch_size = 32
+gardient_accumulation_steps = 16
 batch_size = total_batch_size // gardient_accumulation_steps
-epoches = 10
+epoches = 5
 lr = 3e-4
 r1_zero_prompt = open("cs336_alignment/prompts/r1_zero.prompt", "r").read()
 
@@ -206,8 +209,9 @@ if __name__ == "__main__":
         }
     )
 
-    
+    # llm = init_vllm("Qwen/Qwen2.5-Math-1.5B", "cuda:1", 42, 0.95)
     model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-Math-1.5B", torch_dtype=torch.bfloat16, attn_implementation="flash_attention_2", device_map="auto")
+    # load_policy_into_vllm_instance(model, llm)
     tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-Math-1.5B")  
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 
@@ -226,6 +230,10 @@ if __name__ == "__main__":
     total_steps = len(dataloader) * epoches // gardient_accumulation_steps
     scheduler = CosineAnnealingLR(optimizer, T_max=total_steps, eta_min=lr * 0.1)
     
+    # Create checkpoints directory
+    checkpoint_dir = "checkpoints"
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    
     global_step = 0
     
     for epoch in range(epoches):
@@ -234,24 +242,34 @@ if __name__ == "__main__":
             ret = get_response_log_probs(model, input_id, label, return_token_entropy=True)
             log_probs, token_entropy = ret['log_probs'], ret['token_entropy']            
             avg_token_entropy = torch.mean(token_entropy)
-            perplexity = torch.exp(-torch.mean(log_probs, dim=-1))
+            perplexity = torch.exp(-torch.mean(log_probs))
             
             loss, info = sft_microbatch_train_step(log_probs, response_mask, gardient_accumulation_steps)
-            wandb.log({
-                "loss": loss.item() * gardient_accumulation_steps,
-                "perplexity": torch.mean(perplexity).item(),
-                "avg_token_entropy": avg_token_entropy.item(),
-                "learning_rate": scheduler.get_last_lr()[0],
-                "epoch": epoch,
-                "global_step": global_step,
-                "total_batch_size": total_batch_size,
-            })
+            current_loss, current_perplexity, current_avg_token_entropy = 0, 0, 0
+            current_loss += loss.item()
+            current_perplexity += perplexity.item()
+            current_avg_token_entropy += avg_token_entropy.item()
             
-            global_step += 1            
             if (idx + 1) % gardient_accumulation_steps == 0:
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
+                wandb.log({
+                    "loss": np.mean(current_loss),
+                    "perplexity": np.mean(current_perplexity),
+                    "avg_token_entropy": np.mean(current_avg_token_entropy),
+                    "learning_rate": scheduler.get_last_lr()[0],
+                    "epoch": epoch,
+                    "global_step": global_step,
+                    "total_batch_size": total_batch_size,
+                })
+                global_step += 1
+        
+        # Save model and tokenizer at the end of each epoch
+        epoch_checkpoint_dir = os.path.join(checkpoint_dir, f"epoch_{epoch}")
+        print(f"Saving model checkpoint at epoch {epoch} to {epoch_checkpoint_dir}")
+        model.save_pretrained(epoch_checkpoint_dir)
+
 
 
 
