@@ -1,4 +1,5 @@
 from vllm.model_executor import set_random_seed as vllm_set_random_seed
+from transformers import PreTrainedModel
 from vllm import LLM
 
 def init_vllm(model_id, device, seed, gpu_memory_utilization):

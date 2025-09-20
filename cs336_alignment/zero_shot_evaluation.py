@@ -1,7 +1,9 @@
 from vllm import LLM, SamplingParams
+from transformers import AutoTokenizer, AutoModelForCausalLM
 from cs336_alignment.drgrpo_grader import r1_zero_reward_fn, extract_answer
 import pandas as pd
 import json
+
 r1_zero_prompt = open("cs336_alignment/prompts/r1_zero.prompt", "r").read()
 
 def evaluate_vllm(vllm_model, reward_fn, prompts, sampling_params, ground_truth):
@@ -32,12 +34,14 @@ def evaluate_vllm(vllm_model, reward_fn, prompts, sampling_params, ground_truth)
 
 
 if __name__ == "__main__":
+
     sampling_params = SamplingParams(
         temperature=1.0, top_p=1.0, max_tokens=1024, stop=["</answer>"]
     )
     sampling_params.include_stop_str_in_output = True
 
     llm = LLM(model='Qwen/Qwen2.5-Math-1.5B')
+
 
     reward_fn = r1_zero_reward_fn
     test_df = pd.read_parquet("/workspace/nano-grpo/data/competition_math/test.parquet")
